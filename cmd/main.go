@@ -41,8 +41,29 @@ func forwardQuery(c echo.Context) error {
 
 	viper.SetDefault("resolver.host", "127.0.0.1")
 	viper.SetDefault("resolver.port", "53")
-	_, err = dns.ExchangeContext(request.Context(), query,
-		fmt.Sprintf("%s:%s", viper.GetString("resolver.host"), viper.GetString("resolver.port")))
+	ctx := request.Context()
+	if queryTimeout := viper.GetDuration("timeout.query"); queryTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(request.Context(), queryTimeout)
+		defer cancel()
+	}
+
+	ch := make(chan struct{})
+	go func(ch chan struct{}) {
+		_, err = dns.ExchangeContext(ctx, query,
+			fmt.Sprintf("%s:%s", viper.GetString("resolver.host"), viper.GetString("resolver.port")))
+		ch <- struct{}{}
+	}(ch)
+	select {
+	case <-ch:
+		break
+	case <-ctx.Done():
+		if ctx.Err() == context.DeadlineExceeded {
+			return c.String(504, ctx.Err().Error())
+		}
+		return c.String(500, ctx.Err().Error())
+	}
+
 	if err != nil {
 		return c.String(502, err.Error())
 	}
