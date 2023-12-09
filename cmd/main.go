@@ -14,9 +14,11 @@ func main() {
 	viper.AutomaticEnv()
 
 	e := echo.New()
-	e.GET("/", func(c echo.Context) error {
+	viper.SetDefault("path", "/dns-query")
+	e.GET(viper.GetString("path"), func(c echo.Context) error {
 		return c.String(200, "Hello, World!")
 	})
+
 	viper.SetDefault("listen.port", "1080")
 	e.Start(fmt.Sprintf("%s:%s", viper.GetString("listen.host"), viper.GetString("listen.port")))
 }
