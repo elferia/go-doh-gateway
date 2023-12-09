@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -20,8 +22,9 @@ func main() {
 
 	e := echo.New()
 	viper.SetDefault("path", "/dns-query")
-	e.GET(viper.GetString("path"), forwardQuery)
-	e.POST(viper.GetString("path"), forwardQuery)
+	path := viper.GetString("path")
+	e.GET(path, forwardQuery)
+	e.POST(path, forwardQuery)
 
 	e.Server.ReadTimeout = viper.GetDuration("timeout.read")
 	e.Server.WriteTimeout = viper.GetDuration("timeout.write")
@@ -75,6 +78,15 @@ func forwardQuery(c echo.Context) error {
 		return c.String(400, err.Error())
 	}
 
+	dnsId := make([]byte, 2)
+	if _, err := rand.Read(dnsId); err != nil {
+		return c.String(500, err.Error())
+	}
+	originalId := query.Id
+	query.Id = binary.BigEndian.Uint16(dnsId)
+	c.Response().Header().Set(echo.HeaderXRequestID, fmt.Sprintf("%v%x",
+		c.Response().Header().Get(echo.HeaderXRequestID), query.Id))
+
 	ctx := request.Context()
 	if queryTimeout := viper.GetDuration("timeout.query"); queryTimeout > 0 {
 		var cancel context.CancelFunc
@@ -103,6 +115,7 @@ func forwardQuery(c echo.Context) error {
 		return c.String(502, err.Error())
 	}
 
+	result.Id = originalId
 	result.Compress = true
 	msgBytes, err := result.Pack()
 	if err != nil {
