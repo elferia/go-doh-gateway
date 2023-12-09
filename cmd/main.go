@@ -8,6 +8,7 @@ import (
 
 	"github.com/coredns/coredns/plugin/pkg/doh"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"github.com/miekg/dns"
 	"github.com/spf13/viper"
 )
@@ -26,10 +27,43 @@ func main() {
 	e.Server.WriteTimeout = viper.GetDuration("timeout.write")
 	e.Server.IdleTimeout = viper.GetDuration("timeout.keepalive")
 
+	ctx := context.Background()
+	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
+		LogLatency:   true,
+		LogRequestID: true,
+		LogMethod:    true,
+		LogStatus:    true,
+		LogURI:       true,
+		LogError:     true,
+		HandleError:  true, // forwards error to the global error handler, so it can decide appropriate status code
+		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
+			if v.Error == nil {
+				slog.LogAttrs(ctx, slog.LevelInfo, "request",
+					slog.String("request_id", v.RequestID),
+					slog.String("method", v.Method),
+					slog.String("uri", v.URI),
+					slog.Int("status", v.Status),
+					slog.Float64("latency", v.Latency.Seconds()),
+				)
+			} else {
+				slog.LogAttrs(ctx, slog.LevelError, "error",
+					slog.String("request_id", v.RequestID),
+					slog.String("method", v.Method),
+					slog.String("uri", v.URI),
+					slog.Int("status", v.Status),
+					slog.Float64("latency", v.Latency.Seconds()),
+					slog.String("err", v.Error.Error()),
+				)
+			}
+			return nil
+		},
+	}))
+	e.Use(middleware.RequestID())
+
 	viper.SetDefault("resolver.host", "127.0.0.1")
 	viper.SetDefault("resolver.port", "53")
 	viper.SetDefault("listen.port", "1080")
-	slog.LogAttrs(context.Background(), slog.LevelWarn, "http server stopped",
+	slog.LogAttrs(ctx, slog.LevelWarn, "http server stopped",
 		slog.Group("main", slog.String("error",
 			e.Start(fmt.Sprintf("%s:%s", viper.GetString("listen.host"), viper.GetString("listen.port"))).Error())))
 }
