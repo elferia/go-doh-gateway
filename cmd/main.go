@@ -48,9 +48,10 @@ func forwardQuery(c echo.Context) error {
 		defer cancel()
 	}
 
+	var result *dns.Msg
 	ch := make(chan struct{})
 	go func(ch chan struct{}) {
-		_, err = dns.ExchangeContext(ctx, query,
+		result, err = dns.ExchangeContext(ctx, query,
 			fmt.Sprintf("%s:%s", viper.GetString("resolver.host"), viper.GetString("resolver.port")))
 		ch <- struct{}{}
 	}(ch)
@@ -68,5 +69,11 @@ func forwardQuery(c echo.Context) error {
 		return c.String(502, err.Error())
 	}
 
-	return c.String(200, "Hello, World!")
+	result.Compress = true
+	msgBytes, err := result.Pack()
+	if err != nil {
+		return c.String(500, err.Error())
+	}
+
+	return c.Blob(200, "application/dns-message", msgBytes)
 }
