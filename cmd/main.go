@@ -18,5 +18,5 @@ func main() {
 		return c.String(200, "Hello, World!")
 	})
 	viper.SetDefault("listen.port", "1080")
-	e.Start(fmt.Sprintf(":%s", viper.GetString("listen.port")))
+	e.Start(fmt.Sprintf("%s:%s", viper.GetString("listen.host"), viper.GetString("listen.port")))
 }
