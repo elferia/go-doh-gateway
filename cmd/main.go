@@ -1,11 +1,17 @@
 package main
 
-import "github.com/labstack/echo/v4"
+import (
+	"fmt"
+
+	"github.com/labstack/echo/v4"
+	"github.com/spf13/viper"
+)
 
 func main() {
 	e := echo.New()
 	e.GET("/", func(c echo.Context) error {
 		return c.String(200, "Hello, World!")
 	})
-	e.Start(":1080")
+	viper.SetDefault("listen.port", "1080")
+	e.Start(fmt.Sprintf(":%s", viper.GetString("listen.port")))
 }
