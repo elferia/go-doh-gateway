@@ -26,6 +26,8 @@ func main() {
 	e.Server.WriteTimeout = viper.GetDuration("timeout.write")
 	e.Server.IdleTimeout = viper.GetDuration("timeout.keepalive")
 
+	viper.SetDefault("resolver.host", "127.0.0.1")
+	viper.SetDefault("resolver.port", "53")
 	viper.SetDefault("listen.port", "1080")
 	slog.LogAttrs(context.Background(), slog.LevelWarn, "http server stopped",
 		slog.Group("main", slog.String("error",
@@ -39,8 +41,6 @@ func forwardQuery(c echo.Context) error {
 		return c.String(400, err.Error())
 	}
 
-	viper.SetDefault("resolver.host", "127.0.0.1")
-	viper.SetDefault("resolver.port", "53")
 	ctx := request.Context()
 	if queryTimeout := viper.GetDuration("timeout.query"); queryTimeout > 0 {
 		var cancel context.CancelFunc
