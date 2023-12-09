@@ -5,6 +5,7 @@ go 1.21.4
 require (
 	github.com/coredns/coredns v1.11.1
 	github.com/labstack/echo/v4 v4.11.3
+	github.com/miekg/dns v1.1.55
 	github.com/spf13/viper v1.18.1
 )
 
@@ -15,7 +16,6 @@ require (
 	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
-	github.com/miekg/dns v1.1.55 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.1.0 // indirect
 	github.com/sagikazarmark/locafero v0.4.0 // indirect

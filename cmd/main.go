@@ -8,6 +8,7 @@ import (
 
 	"github.com/coredns/coredns/plugin/pkg/doh"
 	"github.com/labstack/echo/v4"
+	"github.com/miekg/dns"
 	"github.com/spf13/viper"
 )
 
@@ -32,9 +33,19 @@ func main() {
 }
 
 func forwardQuery(c echo.Context) error {
-	_, err := doh.RequestToMsg(c.Request())
+	request := c.Request()
+	query, err := doh.RequestToMsg(request)
 	if err != nil {
 		return c.String(400, err.Error())
 	}
+
+	viper.SetDefault("resolver.host", "127.0.0.1")
+	viper.SetDefault("resolver.port", "53")
+	_, err = dns.ExchangeContext(request.Context(), query,
+		fmt.Sprintf("%s:%s", viper.GetString("resolver.host"), viper.GetString("resolver.port")))
+	if err != nil {
+		return c.String(502, err.Error())
+	}
+
 	return c.String(200, "Hello, World!")
 }
