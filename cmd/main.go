@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -20,5 +22,7 @@ func main() {
 	})
 
 	viper.SetDefault("listen.port", "1080")
-	e.Start(fmt.Sprintf("%s:%s", viper.GetString("listen.host"), viper.GetString("listen.port")))
+	slog.LogAttrs(context.Background(), slog.LevelWarn, "http server stopped",
+		slog.Group("main", slog.String("error",
+			e.Start(fmt.Sprintf("%s:%s", viper.GetString("listen.host"), viper.GetString("listen.port"))).Error())))
 }
