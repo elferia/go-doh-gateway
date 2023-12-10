@@ -127,6 +127,8 @@ func forwardQuery(c echo.Context) error {
 		break
 	case <-ctx.Done():
 		if ctx.Err() == context.DeadlineExceeded {
+			slog.LogAttrs(request.Context(), slog.LevelInfo, "DNS query timeout",
+				slog.String("request_id", c.Response().Header().Get(echo.HeaderXRequestID)))
 			result = query.Copy()
 			result.Response = true
 			result.RecursionAvailable = true
