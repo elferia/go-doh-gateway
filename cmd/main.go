@@ -116,6 +116,19 @@ func forwardQuery(c echo.Context) error {
 		return c.String(502, err.Error())
 	}
 
+	var ttl uint32
+	if len(result.Answer) > 0 {
+		ttl = result.Answer[0].Header().Ttl
+		for _, answer := range result.Answer {
+			ttl = min(ttl, answer.Header().Ttl)
+		}
+	} else if len(result.Ns) > 0 {
+		if soa, ok := result.Ns[0].(*dns.SOA); ok {
+			ttl = soa.Minttl
+		}
+	}
+	c.Response().Header().Set(echo.HeaderCacheControl, fmt.Sprintf("max-age=%d", ttl))
+
 	result.Id = originalId
 	result.Compress = true
 	msgBytes, err := result.Pack()
