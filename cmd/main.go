@@ -112,6 +112,7 @@ func forwardQuery(c echo.Context) error {
 	}
 
 	if err != nil {
+		slog.LogAttrs(request.Context(), slog.LevelError, "DNS exchange error", slog.String("err", err.Error()))
 		return c.String(502, err.Error())
 	}
 
