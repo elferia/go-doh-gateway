@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/coredns/coredns/plugin/pkg/doh"
@@ -15,10 +16,23 @@ import (
 	"github.com/spf13/viper"
 )
 
+var logLevel = new(slog.LevelVar)
+
 func main() {
 	viper.SetEnvPrefix("doh_gateway")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
+
+	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
+	slog.SetDefault(slog.New(h))
+	viper.SetDefault("log.level", "info")
+	ctx := context.Background()
+	if err := logLevel.UnmarshalText([]byte(viper.GetString("log.level"))); err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "failed to parse log level",
+			slog.String("level", viper.GetString("log.level")),
+			slog.String("err", err.Error()),
+		)
+	}
 
 	e := echo.New()
 	viper.SetDefault("path", "/dns-query")
@@ -30,7 +44,6 @@ func main() {
 	e.Server.WriteTimeout = viper.GetDuration("timeout.write")
 	e.Server.IdleTimeout = viper.GetDuration("timeout.keepalive")
 
-	ctx := context.Background()
 	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		LogLatency:   true,
 		LogRequestID: true,
