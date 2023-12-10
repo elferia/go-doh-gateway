@@ -127,7 +127,11 @@ func forwardQuery(c echo.Context) error {
 		break
 	case <-ctx.Done():
 		if ctx.Err() == context.DeadlineExceeded {
-			return c.String(504, ctx.Err().Error())
+			result = query.Copy()
+			result.Response = true
+			result.RecursionAvailable = true
+			result.Rcode = dns.RcodeServerFailure
+			goto noHTTPError
 		}
 		return ctx.Err()
 	}
@@ -136,20 +140,21 @@ func forwardQuery(c echo.Context) error {
 		slog.LogAttrs(request.Context(), slog.LevelError, "DNS exchange error", slog.String("err", err.Error()))
 		return c.String(502, err.Error())
 	}
-
-	var ttl uint32
-	if len(result.Answer) > 0 {
-		ttl = result.Answer[0].Header().Ttl
-		for _, answer := range result.Answer {
-			ttl = min(ttl, answer.Header().Ttl)
+	{
+		var ttl uint32
+		if len(result.Answer) > 0 {
+			ttl = result.Answer[0].Header().Ttl
+			for _, answer := range result.Answer {
+				ttl = min(ttl, answer.Header().Ttl)
+			}
+		} else if len(result.Ns) > 0 {
+			if soa, ok := result.Ns[0].(*dns.SOA); ok {
+				ttl = soa.Minttl
+			}
 		}
-	} else if len(result.Ns) > 0 {
-		if soa, ok := result.Ns[0].(*dns.SOA); ok {
-			ttl = soa.Minttl
-		}
+		c.Response().Header().Set(echo.HeaderCacheControl, fmt.Sprintf("max-age=%d", ttl))
 	}
-	c.Response().Header().Set(echo.HeaderCacheControl, fmt.Sprintf("max-age=%d", ttl))
-
+noHTTPError:
 	result.Id = originalId
 	result.Compress = true
 	msgBytes, err := result.Pack()
