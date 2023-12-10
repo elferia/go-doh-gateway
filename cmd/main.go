@@ -101,6 +101,7 @@ func forwardQuery(c echo.Context) error {
 	c.Response().Header().Set(echo.HeaderXRequestID, c.Response().Header().Get(echo.HeaderXRequestID)+hexId)
 	ctx := request.Context()
 	slog.LogAttrs(ctx, slog.LevelDebug, "request details",
+		slog.String("remote_addr", request.RemoteAddr),
 		slog.String("request_id", c.Response().Header().Get(echo.HeaderXRequestID)),
 		slog.String("query_id", hexId),
 		slog.String("name", query.Question[0].Name),
