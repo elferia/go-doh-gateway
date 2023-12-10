@@ -93,7 +93,7 @@ func forwardQuery(c echo.Context) error {
 
 	dnsId := make([]byte, 2)
 	if _, err := rand.Read(dnsId); err != nil {
-		return c.String(500, err.Error())
+		return err
 	}
 	originalId := query.Id
 	query.Id = binary.BigEndian.Uint16(dnsId)
@@ -129,7 +129,7 @@ func forwardQuery(c echo.Context) error {
 		if ctx.Err() == context.DeadlineExceeded {
 			return c.String(504, ctx.Err().Error())
 		}
-		return c.String(500, ctx.Err().Error())
+		return ctx.Err()
 	}
 
 	if err != nil {
@@ -154,7 +154,7 @@ func forwardQuery(c echo.Context) error {
 	result.Compress = true
 	msgBytes, err := result.Pack()
 	if err != nil {
-		return c.String(500, err.Error())
+		return err
 	}
 
 	return c.Blob(200, "application/dns-message", msgBytes)
