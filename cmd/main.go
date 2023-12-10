@@ -84,10 +84,17 @@ func forwardQuery(c echo.Context) error {
 	}
 	originalId := query.Id
 	query.Id = binary.BigEndian.Uint16(dnsId)
-	c.Response().Header().Set(echo.HeaderXRequestID, fmt.Sprintf("%v%04x",
-		c.Response().Header().Get(echo.HeaderXRequestID), query.Id))
-
+	hexId := fmt.Sprintf("%04x", query.Id)
+	c.Response().Header().Set(echo.HeaderXRequestID, c.Response().Header().Get(echo.HeaderXRequestID)+hexId)
 	ctx := request.Context()
+	slog.LogAttrs(ctx, slog.LevelDebug, "request details",
+		slog.String("request_id", c.Response().Header().Get(echo.HeaderXRequestID)),
+		slog.String("query_id", hexId),
+		slog.String("name", query.Question[0].Name),
+		slog.String("class/type",
+			dns.ClassToString[query.Question[0].Qclass]+"/"+dns.TypeToString[query.Question[0].Qtype]),
+	)
+
 	if queryTimeout := viper.GetDuration("timeout.query"); queryTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(request.Context(), queryTimeout)
