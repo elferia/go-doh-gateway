@@ -84,7 +84,7 @@ func forwardQuery(c echo.Context) error {
 	}
 	originalId := query.Id
 	query.Id = binary.BigEndian.Uint16(dnsId)
-	c.Response().Header().Set(echo.HeaderXRequestID, fmt.Sprintf("%v%x",
+	c.Response().Header().Set(echo.HeaderXRequestID, fmt.Sprintf("%v%04x",
 		c.Response().Header().Get(echo.HeaderXRequestID), query.Id))
 
 	ctx := request.Context()
