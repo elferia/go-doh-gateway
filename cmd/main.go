@@ -129,10 +129,12 @@ func forwardQuery(c echo.Context) error {
 		if ctx.Err() == context.DeadlineExceeded {
 			slog.LogAttrs(request.Context(), slog.LevelInfo, "DNS query timeout",
 				slog.String("request_id", c.Response().Header().Get(echo.HeaderXRequestID)))
-			result = query.Copy()
+			result = &dns.Msg{}
 			result.Response = true
+			result.RecursionDesired = query.RecursionDesired
 			result.RecursionAvailable = true
 			result.Rcode = dns.RcodeServerFailure
+			result.Question = append(result.Question, query.Question[0])
 			goto noHTTPError
 		}
 		return ctx.Err()
