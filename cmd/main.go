@@ -151,9 +151,12 @@ func forwardQuery(c echo.Context) error {
 			for _, answer := range result.Answer {
 				ttl = min(ttl, answer.Header().Ttl)
 			}
-		} else if len(result.Ns) > 0 {
-			if soa, ok := result.Ns[0].(*dns.SOA); ok {
-				ttl = soa.Minttl
+		} else {
+			for _, Ns := range result.Ns {
+				if soa, ok := Ns.(*dns.SOA); ok {
+					ttl = soa.Minttl
+					break
+				}
 			}
 		}
 		c.Response().Header().Set(echo.HeaderCacheControl, fmt.Sprintf("max-age=%d", ttl))
