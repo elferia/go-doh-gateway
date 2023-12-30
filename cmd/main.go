@@ -111,39 +111,28 @@ func forwardQuery(c echo.Context) error {
 
 	if queryTimeout := viper.GetDuration("timeout.query"); queryTimeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(request.Context(), queryTimeout)
+		ctx, cancel = context.WithTimeout(ctx, queryTimeout)
 		defer cancel()
 	}
 
-	var result *dns.Msg
-	ch := make(chan struct{})
-	go func(ch chan struct{}) {
-		result, err = dns.ExchangeContext(ctx, query,
-			fmt.Sprintf("%s:%s", viper.GetString("resolver.host"), viper.GetString("resolver.port")))
-		ch <- struct{}{}
-	}(ch)
-	select {
-	case <-ch:
-		break
-	case <-ctx.Done():
-		if ctx.Err() == context.DeadlineExceeded {
+	result, err := dns.ExchangeContext(
+		ctx, query, fmt.Sprintf("%s:%s", viper.GetString("resolver.host"), viper.GetString("resolver.port")))
+	if err != nil {
+		if err == context.DeadlineExceeded {
 			slog.LogAttrs(request.Context(), slog.LevelInfo, "DNS query timeout",
 				slog.String("request_id", c.Response().Header().Get(echo.HeaderXRequestID)))
-			result = &dns.Msg{}
-			result.Response = true
-			result.RecursionDesired = query.RecursionDesired
-			result.RecursionAvailable = true
-			result.Rcode = dns.RcodeServerFailure
-			result.Question = append(result.Question, query.Question[0])
-			goto noHTTPError
+		} else {
+			slog.LogAttrs(request.Context(), slog.LevelWarn, "DNS exchange error", slog.String("error", err.Error()))
 		}
-		return ctx.Err()
+		result = &dns.Msg{}
+		result.Response = true
+		result.RecursionDesired = query.RecursionDesired
+		result.RecursionAvailable = true
+		result.Rcode = dns.RcodeServerFailure
+		result.Question = append(result.Question, query.Question[0])
+		goto respond
 	}
 
-	if err != nil {
-		slog.LogAttrs(request.Context(), slog.LevelError, "DNS exchange error", slog.String("err", err.Error()))
-		return c.String(502, err.Error())
-	}
 	{
 		var ttl uint32
 		if len(result.Answer) > 0 {
@@ -161,7 +150,7 @@ func forwardQuery(c echo.Context) error {
 		}
 		c.Response().Header().Set(echo.HeaderCacheControl, fmt.Sprintf("max-age=%d", ttl))
 	}
-noHTTPError:
+respond:
 	result.Id = originalId
 	result.Compress = true
 	msgBytes, err := result.Pack()
