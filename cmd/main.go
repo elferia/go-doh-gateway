@@ -30,7 +30,7 @@ func main() {
 	if err := logLevel.UnmarshalText([]byte(viper.GetString("log.level"))); err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "failed to parse log level",
 			slog.String("level", viper.GetString("log.level")),
-			slog.String("err", err.Error()),
+			slog.String("error", err.Error()),
 		)
 	}
 
@@ -53,23 +53,18 @@ func main() {
 		LogError:     true,
 		HandleError:  true, // forwards error to the global error handler, so it can decide appropriate status code
 		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
+			logger := slog.With(
+				slog.String("request_id", v.RequestID),
+				slog.String("remote_addr", c.Request().RemoteAddr),
+				slog.String("method", v.Method),
+				slog.String("uri", v.URI),
+				slog.Int("status", v.Status),
+				slog.Float64("latency", v.Latency.Seconds()),
+			)
 			if v.Error == nil {
-				slog.LogAttrs(ctx, slog.LevelInfo, "request",
-					slog.String("request_id", v.RequestID),
-					slog.String("method", v.Method),
-					slog.String("uri", v.URI),
-					slog.Int("status", v.Status),
-					slog.Float64("latency", v.Latency.Seconds()),
-				)
+				logger.LogAttrs(ctx, slog.LevelInfo, "request_ok")
 			} else {
-				slog.LogAttrs(ctx, slog.LevelError, "error",
-					slog.String("request_id", v.RequestID),
-					slog.String("method", v.Method),
-					slog.String("uri", v.URI),
-					slog.Int("status", v.Status),
-					slog.Float64("latency", v.Latency.Seconds()),
-					slog.String("err", v.Error.Error()),
-				)
+				logger.LogAttrs(ctx, slog.LevelError, "request_error", slog.String("error", v.Error.Error()))
 			}
 			return nil
 		},
@@ -100,14 +95,6 @@ func forwardQuery(c echo.Context) error {
 	hexId := fmt.Sprintf("%04x", query.Id)
 	c.Response().Header().Set(echo.HeaderXRequestID, c.Response().Header().Get(echo.HeaderXRequestID)+hexId)
 	ctx := request.Context()
-	slog.LogAttrs(ctx, slog.LevelDebug, "request details",
-		slog.String("remote_addr", request.RemoteAddr),
-		slog.String("request_id", c.Response().Header().Get(echo.HeaderXRequestID)),
-		slog.String("query_id", hexId),
-		slog.String("name", query.Question[0].Name),
-		slog.String("class/type",
-			dns.ClassToString[query.Question[0].Qclass]+"/"+dns.TypeToString[query.Question[0].Qtype]),
-	)
 
 	if queryTimeout := viper.GetDuration("timeout.query"); queryTimeout > 0 {
 		var cancel context.CancelFunc
@@ -115,14 +102,22 @@ func forwardQuery(c echo.Context) error {
 		defer cancel()
 	}
 
+	logger := slog.With(
+		slog.String("request_id", c.Response().Header().Get(echo.HeaderXRequestID)),
+		slog.String("name", query.Question[0].Name),
+		slog.String("class", dns.ClassToString[query.Question[0].Qclass]),
+		slog.String("type", dns.TypeToString[query.Question[0].Qtype]),
+	)
+
 	result, err := dns.ExchangeContext(
 		ctx, query, fmt.Sprintf("%s:%s", viper.GetString("resolver.host"), viper.GetString("resolver.port")))
+	ctxErr := ctx.Err()
+	ctx = request.Context()
 	if err != nil {
-		if err == context.DeadlineExceeded {
-			slog.LogAttrs(request.Context(), slog.LevelInfo, "DNS query timeout",
-				slog.String("request_id", c.Response().Header().Get(echo.HeaderXRequestID)))
+		if ctxErr == context.DeadlineExceeded {
+			logger.LogAttrs(ctx, slog.LevelInfo, "DNS query timeout")
 		} else {
-			slog.LogAttrs(request.Context(), slog.LevelWarn, "DNS exchange error", slog.String("error", err.Error()))
+			logger.LogAttrs(ctx, slog.LevelWarn, "DNS exchange error", slog.String("error", err.Error()))
 		}
 		result = &dns.Msg{}
 		result.Response = true
@@ -131,6 +126,10 @@ func forwardQuery(c echo.Context) error {
 		result.Rcode = dns.RcodeServerFailure
 		result.Question = append(result.Question, query.Question[0])
 		goto respond
+	}
+
+	if result.Truncated {
+		logger.LogAttrs(ctx, slog.LevelWarn, "DNS response truncated")
 	}
 
 	{
