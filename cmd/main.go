@@ -64,7 +64,7 @@ func main() {
 			if v.Error == nil {
 				logger.LogAttrs(ctx, slog.LevelInfo, "request_ok")
 			} else {
-				logger.LogAttrs(ctx, slog.LevelError, "request_error", slog.String("error", v.Error.Error()))
+				logger.LogAttrs(ctx, slog.LevelError, "request_error", slog.Any("error", v.Error))
 			}
 			return nil
 		},
@@ -74,9 +74,9 @@ func main() {
 	viper.SetDefault("resolver.host", "127.0.0.1")
 	viper.SetDefault("resolver.port", "53")
 	viper.SetDefault("listen.port", "1080")
-	slog.LogAttrs(ctx, slog.LevelWarn, "http server stopped",
-		slog.Group("main", slog.String("error",
-			e.Start(fmt.Sprintf("%s:%s", viper.GetString("listen.host"), viper.GetString("listen.port"))).Error())))
+	slog.LogAttrs(ctx, slog.LevelError, "failed to start",
+		slog.Any("error",
+			e.Start(fmt.Sprintf("%s:%s", viper.GetString("listen.host"), viper.GetString("listen.port")))))
 }
 
 func forwardQuery(c echo.Context) error {
@@ -92,10 +92,10 @@ func forwardQuery(c echo.Context) error {
 	}
 	originalId := query.Id
 	query.Id = binary.BigEndian.Uint16(dnsId)
-	hexId := fmt.Sprintf("%04x", query.Id)
-	c.Response().Header().Set(echo.HeaderXRequestID, c.Response().Header().Get(echo.HeaderXRequestID)+hexId)
-	ctx := request.Context()
+	c.Response().Header().Set(echo.HeaderXRequestID,
+		c.Response().Header().Get(echo.HeaderXRequestID)+fmt.Sprintf("%04x", query.Id))
 
+	ctx := request.Context()
 	if queryTimeout := viper.GetDuration("timeout.query"); queryTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, queryTimeout)
@@ -117,7 +117,7 @@ func forwardQuery(c echo.Context) error {
 		if ctxErr == context.DeadlineExceeded {
 			logger.LogAttrs(ctx, slog.LevelInfo, "DNS query timeout")
 		} else {
-			logger.LogAttrs(ctx, slog.LevelWarn, "DNS exchange error", slog.String("error", err.Error()))
+			logger.LogAttrs(ctx, slog.LevelWarn, "DNS exchange error", slog.Any("error", err))
 		}
 		result = &dns.Msg{}
 		result.Response = true
