@@ -6,8 +6,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/coredns/coredns/plugin/pkg/doh"
 	"github.com/labstack/echo/v4"
@@ -54,17 +56,17 @@ func main() {
 		HandleError:  true, // forwards error to the global error handler, so it can decide appropriate status code
 		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
 			logger := slog.With(
-				slog.String("request_id", v.RequestID),
-				slog.String("remote_addr", c.Request().RemoteAddr),
+				slog.String("request id", v.RequestID),
+				slog.String("remote addr", c.Request().RemoteAddr),
 				slog.String("method", v.Method),
 				slog.String("uri", v.URI),
 				slog.Int("status", v.Status),
 				slog.Float64("latency", v.Latency.Seconds()),
 			)
 			if v.Error == nil {
-				logger.LogAttrs(ctx, slog.LevelInfo, "request_ok")
+				logger.LogAttrs(ctx, slog.LevelInfo, "request ok")
 			} else {
-				logger.LogAttrs(ctx, slog.LevelError, "request_error", slog.Any("error", v.Error))
+				logger.LogAttrs(ctx, slog.LevelError, "request error", slog.Any("error", v.Error))
 			}
 			return nil
 		},
@@ -109,23 +111,34 @@ func forwardQuery(c echo.Context) error {
 		slog.String("type", dns.TypeToString[query.Question[0].Qtype]),
 	)
 
-	result, err := dns.ExchangeContext(
-		ctx, query, fmt.Sprintf("%s:%s", viper.GetString("resolver.host"), viper.GetString("resolver.port")))
-	ctxErr := ctx.Err()
-	ctx = request.Context()
-	if err != nil {
-		if ctxErr == context.DeadlineExceeded {
-			logger.LogAttrs(ctx, slog.LevelInfo, "DNS query timeout")
+	ch := make(chan dnsResult)
+	go func(query *dns.Msg) {
+		result, rtt, err := (&dns.Client{Dialer: new(net.Dialer)}).ExchangeContext(
+			ctx, query, fmt.Sprintf("%s:%s", viper.GetString("resolver.host"), viper.GetString("resolver.port")))
+		ch <- dnsResult{Result: result, RTT: rtt, Err: err}
+	}(query.Copy())
+
+	var result *dns.Msg
+	select {
+	case <-ctx.Done():
+		if err := ctx.Err(); err == context.DeadlineExceeded {
+			logger.LogAttrs(request.Context(), slog.LevelInfo, "DNS query timeout")
+			result = servfail(query)
+			goto respond
 		} else {
-			logger.LogAttrs(ctx, slog.LevelWarn, "DNS exchange error", slog.Any("error", err))
+			logger.LogAttrs(request.Context(), slog.LevelDebug, "request canceled", slog.Any("error", err))
+			return c.NoContent(400)
 		}
-		result = &dns.Msg{}
-		result.Response = true
-		result.RecursionDesired = query.RecursionDesired
-		result.RecursionAvailable = true
-		result.Rcode = dns.RcodeServerFailure
-		result.Question = append(result.Question, query.Question[0])
-		goto respond
+	case r := <-ch:
+		ctx = request.Context()
+		if r.Err != nil {
+			logger.LogAttrs(ctx, slog.LevelWarn, "DNS exchange error", slog.Any("error", r.Err))
+			result = servfail(query)
+			goto respond
+		} else {
+			result = r.Result
+			logger.LogAttrs(ctx, slog.LevelDebug, "DNS exchange ok", slog.Duration("RTT", r.RTT))
+		}
 	}
 
 	if result.Truncated {
@@ -158,4 +171,24 @@ respond:
 	}
 
 	return c.Blob(200, "application/dns-message", msgBytes)
+}
+
+type dnsResult struct {
+	Result *dns.Msg
+	RTT    time.Duration
+	Err    error
+}
+
+func servfail(query *dns.Msg) *dns.Msg {
+	return &dns.Msg{
+		MsgHdr: dns.MsgHdr{
+			Response:           true,
+			RecursionDesired:   query.RecursionDesired,
+			RecursionAvailable: true,
+			Rcode:              dns.RcodeServerFailure,
+		},
+		Question: []dns.Question{
+			query.Question[0],
+		},
+	}
 }
