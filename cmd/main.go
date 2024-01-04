@@ -80,7 +80,7 @@ func main() {
 			e.Start(fmt.Sprintf("%s:%s", viper.GetString("listen.host"), viper.GetString("listen.port")))))
 }
 
-const timeout = 1 * time.Minute
+const timeout = 1 * time.Hour
 
 func forwardQuery(c echo.Context) error {
 	request := c.Request()
@@ -127,7 +127,7 @@ func forwardQuery(c echo.Context) error {
 			result = servfail(query)
 			goto respond
 		} else {
-			logger.LogAttrs(request.Context(), slog.LevelDebug, "request canceled", slog.Any("error", err))
+			logger.LogAttrs(request.Context(), slog.LevelInfo, "request canceled", slog.Any("error", err))
 			return c.NoContent(400)
 		}
 	case r := <-ch:
