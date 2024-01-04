@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"strings"
 	"time"
@@ -81,6 +80,8 @@ func main() {
 			e.Start(fmt.Sprintf("%s:%s", viper.GetString("listen.host"), viper.GetString("listen.port")))))
 }
 
+const timeout = 1 * time.Minute
+
 func forwardQuery(c echo.Context) error {
 	request := c.Request()
 	query, err := doh.RequestToMsg(request)
@@ -113,7 +114,7 @@ func forwardQuery(c echo.Context) error {
 
 	ch := make(chan dnsResult)
 	go func(query *dns.Msg) {
-		result, rtt, err := (&dns.Client{Dialer: new(net.Dialer)}).ExchangeContext(
+		result, rtt, err := (&dns.Client{Timeout: timeout}).ExchangeContext(
 			ctx, query, fmt.Sprintf("%s:%s", viper.GetString("resolver.host"), viper.GetString("resolver.port")))
 		ch <- dnsResult{Result: result, RTT: rtt, Err: err}
 	}(query.Copy())
