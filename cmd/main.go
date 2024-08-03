@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -24,12 +25,14 @@ func main() {
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 
+	// log.levelのパース失敗もログに出すため、NewTextHandlerを先に定義する
+	// するとHandlerOptions.Levelを後から変更することになる
+	// そのため型はLevelではなくLevelVarの必要がある
 	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
 	slog.SetDefault(slog.New(h))
 	viper.SetDefault("log.level", "info")
-	ctx := context.Background()
 	if err := logLevel.UnmarshalText([]byte(viper.GetString("log.level"))); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "failed to parse log level",
+		slog.LogAttrs(context.Background(), slog.LevelError, "failed to parse log level",
 			slog.String("level", viper.GetString("log.level")),
 			slog.String("error", err.Error()),
 		)
@@ -60,12 +63,12 @@ func main() {
 				slog.String("method", v.Method),
 				slog.String("uri", v.URI),
 				slog.Int("status", v.Status),
-				slog.Float64("latency", v.Latency.Seconds()),
+				slog.Duration("latency", v.Latency),
 			)
 			if v.Error == nil {
-				logger.LogAttrs(ctx, slog.LevelInfo, "request ok")
+				logger.LogAttrs(context.Background(), slog.LevelInfo, "request ok")
 			} else {
-				logger.LogAttrs(ctx, slog.LevelError, "request error", slog.Any("error", v.Error))
+				logger.LogAttrs(context.Background(), slog.LevelError, "request error", slog.Any("error", v.Error))
 			}
 			return nil
 		},
@@ -73,14 +76,12 @@ func main() {
 	e.Use(middleware.RequestID())
 
 	viper.SetDefault("resolver.host", "127.0.0.1")
-	viper.SetDefault("resolver.port", "53")
-	viper.SetDefault("listen.port", "1080")
-	slog.LogAttrs(ctx, slog.LevelError, "failed to start",
+	viper.SetDefault("resolver.port", 53)
+	viper.SetDefault("listen.port", 1080)
+	slog.LogAttrs(context.Background(), slog.LevelError, "failed to start",
 		slog.Any("error",
-			e.Start(fmt.Sprintf("%s:%s", viper.GetString("listen.host"), viper.GetString("listen.port")))))
+			e.Start(fmt.Sprintf("%s:%d", viper.GetString("listen.host"), viper.GetInt("listen.port")))))
 }
-
-const timeout = 1 * time.Hour
 
 func forwardQuery(c echo.Context) error {
 	request := c.Request()
@@ -96,14 +97,21 @@ func forwardQuery(c echo.Context) error {
 	originalId := query.Id
 	query.Id = binary.BigEndian.Uint16(dnsId)
 	c.Response().Header().Set(echo.HeaderXRequestID,
-		c.Response().Header().Get(echo.HeaderXRequestID)+fmt.Sprintf("%04x", query.Id))
+		fmt.Sprintf("%v_%04x", c.Response().Header().Get(echo.HeaderXRequestID), query.Id))
 
 	ctx := request.Context()
+	var cancel context.CancelFunc
 	if queryTimeout := viper.GetDuration("timeout.query"); queryTimeout > 0 {
-		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, queryTimeout)
 		defer cancel()
 	}
+
+	ch := make(chan dnsResult)
+	go func(query *dns.Msg) {
+		result, rtt, err := (&dns.Client{}).ExchangeContext(
+			ctx, query, fmt.Sprintf("%s:%d", viper.GetString("resolver.host"), viper.GetInt("resolver.port")))
+		ch <- dnsResult{Result: result, RTT: rtt, Err: err}
+	}(query.Copy()) // queryは以下でもアクセスするので、raceを避けるためにコピーしてgoroutineの引数に渡している
 
 	logger := slog.With(
 		slog.String("request_id", c.Response().Header().Get(echo.HeaderXRequestID)),
@@ -112,49 +120,48 @@ func forwardQuery(c echo.Context) error {
 		slog.String("type", dns.TypeToString[query.Question[0].Qtype]),
 	)
 
-	ch := make(chan dnsResult)
-	go func(query *dns.Msg) {
-		result, rtt, err := (&dns.Client{Timeout: timeout}).ExchangeContext(
-			ctx, query, fmt.Sprintf("%s:%s", viper.GetString("resolver.host"), viper.GetString("resolver.port")))
-		ch <- dnsResult{Result: result, RTT: rtt, Err: err}
-	}(query.Copy())
-
-	var result *dns.Msg
+	var dnsResponse *dns.Msg
 	select {
 	case <-ctx.Done():
+		if cancel != nil {
+			cancel()
+		}
 		if err := ctx.Err(); err == context.DeadlineExceeded {
 			logger.LogAttrs(request.Context(), slog.LevelInfo, "DNS query timeout")
-			result = servfail(query)
-			goto respond
+			dnsResponse = servfail(query)
+			goto respondHttp
 		} else {
 			logger.LogAttrs(request.Context(), slog.LevelInfo, "request canceled", slog.Any("error", err))
 			return c.NoContent(400)
 		}
-	case r := <-ch:
+	case result := <-ch:
+		if cancel != nil {
+			cancel()
+		}
 		ctx = request.Context()
-		if r.Err != nil {
-			logger.LogAttrs(ctx, slog.LevelWarn, "DNS exchange error", slog.Any("error", r.Err))
-			result = servfail(query)
-			goto respond
+		if result.Err != nil {
+			logger.LogAttrs(ctx, slog.LevelWarn, "DNS exchange error", slog.Any("error", result.Err))
+			dnsResponse = servfail(query)
+			goto respondHttp
 		} else {
-			result = r.Result
-			logger.LogAttrs(ctx, slog.LevelDebug, "DNS exchange ok", slog.Duration("RTT", r.RTT))
+			dnsResponse = result.Result
+			logger.LogAttrs(ctx, slog.LevelDebug, "DNS exchange ok", slog.Duration("RTT", result.RTT))
 		}
 	}
 
-	if result.Truncated {
+	if dnsResponse.Truncated {
 		logger.LogAttrs(ctx, slog.LevelWarn, "DNS response truncated")
 	}
 
 	{
 		var ttl uint32
-		if len(result.Answer) > 0 {
-			ttl = result.Answer[0].Header().Ttl
-			for _, answer := range result.Answer {
+		if len(dnsResponse.Answer) > 0 {
+			ttl = math.MaxUint32
+			for _, answer := range dnsResponse.Answer {
 				ttl = min(ttl, answer.Header().Ttl)
 			}
 		} else {
-			for _, Ns := range result.Ns {
+			for _, Ns := range dnsResponse.Ns {
 				if soa, ok := Ns.(*dns.SOA); ok {
 					ttl = soa.Minttl
 					break
@@ -163,15 +170,15 @@ func forwardQuery(c echo.Context) error {
 		}
 		c.Response().Header().Set(echo.HeaderCacheControl, fmt.Sprintf("max-age=%d", ttl))
 	}
-respond:
-	result.Id = originalId
-	result.Compress = true
-	msgBytes, err := result.Pack()
+respondHttp:
+	dnsResponse.Id = originalId
+	dnsResponse.Compress = true
+	responseBody, err := dnsResponse.Pack()
 	if err != nil {
 		return err
 	}
 
-	return c.Blob(200, "application/dns-message", msgBytes)
+	return c.Blob(200, "application/dns-message", responseBody)
 }
 
 type dnsResult struct {
