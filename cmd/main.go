@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -78,9 +79,19 @@ func main() {
 	viper.SetDefault("resolver.host", "127.0.0.1")
 	viper.SetDefault("resolver.port", 53)
 	viper.SetDefault("listen.port", 1080)
-	slog.LogAttrs(context.Background(), slog.LevelError, "failed to start",
-		slog.Any("error",
-			e.Start(fmt.Sprintf("%s:%d", viper.GetString("listen.host"), viper.GetInt("listen.port")))))
+	var address string
+	if unixSocketPath := viper.GetString("listen.unixPath"); unixSocketPath == "" {
+		address = fmt.Sprintf("%s:%d", viper.GetString("listen.host"), viper.GetInt("listen.port"))
+	} else {
+		listener, err := net.Listen("unix", unixSocketPath)
+		if err != nil {
+			slog.LogAttrs(context.Background(), slog.LevelError, "failed to listen unix socket",
+				slog.String("path", unixSocketPath), slog.Any("error", err))
+			os.Exit(1)
+		}
+		e.Listener = listener
+	}
+	slog.LogAttrs(context.Background(), slog.LevelError, "failed to start", slog.Any("error", e.Start(address)))
 }
 
 func forwardQuery(c echo.Context) error {
