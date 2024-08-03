@@ -17,6 +17,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/miekg/dns"
 	"github.com/spf13/viper"
+	"github.com/tg123/go-htpasswd"
 )
 
 var logLevel = new(slog.LevelVar)
@@ -32,11 +33,10 @@ func main() {
 	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
 	slog.SetDefault(slog.New(h))
 	viper.SetDefault("log.level", "info")
-	if err := logLevel.UnmarshalText([]byte(viper.GetString("log.level"))); err != nil {
-		slog.LogAttrs(context.Background(), slog.LevelError, "failed to parse log level",
-			slog.String("level", viper.GetString("log.level")),
-			slog.String("error", err.Error()),
-		)
+	logLevelSetting := viper.GetString("log.level")
+	if err := logLevel.UnmarshalText([]byte(logLevelSetting)); err != nil {
+		slog.LogAttrs(context.Background(), slog.LevelWarn, "failed to parse log level",
+			slog.String("level", logLevelSetting), slog.Any("error", err))
 	}
 
 	e := echo.New()
@@ -48,6 +48,23 @@ func main() {
 	e.Server.ReadTimeout = viper.GetDuration("timeout.read")
 	e.Server.WriteTimeout = viper.GetDuration("timeout.write")
 	e.Server.IdleTimeout = viper.GetDuration("timeout.keepalive")
+
+	var credStore *htpasswd.File
+	if authFilePath := viper.GetString("auth.path"); authFilePath != "" {
+		var err error
+		credStore, err = htpasswd.New(authFilePath, htpasswd.DefaultSystems, nil)
+		if err != nil {
+			slog.LogAttrs(context.Background(), slog.LevelError, "failed to parse password file",
+				slog.String("path", authFilePath), slog.Any("error", err))
+			os.Exit(1)
+		}
+	}
+	if credStore != nil {
+		e.Use(middleware.BasicAuth(func(username, password string, c echo.Context) (bool, error) {
+			// credStoreはconcurrency safe
+			return credStore.Match(username, password), nil
+		}))
+	}
 
 	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		LogLatency:   true,
@@ -74,6 +91,7 @@ func main() {
 			return nil
 		},
 	}))
+
 	e.Use(middleware.RequestID())
 
 	viper.SetDefault("resolver.host", "127.0.0.1")
