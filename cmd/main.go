@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -66,6 +67,14 @@ func main() {
 		}))
 	}
 
+	origIPExtractor := e.IPExtractor
+	e.IPExtractor = func(request *http.Request) string {
+		if v := request.Header.Get("CF-Connecting-IP"); v != "" {
+			return v
+		}
+		return origIPExtractor(request)
+	}
+
 	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		LogLatency:   true,
 		LogRequestID: true,
@@ -76,8 +85,8 @@ func main() {
 		HandleError:  true, // forwards error to the global error handler, so it can decide appropriate status code
 		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
 			logger := slog.With(
-				slog.String("request id", v.RequestID),
-				slog.String("remote addr", c.Request().RemoteAddr),
+				slog.String("request_id", v.RequestID),
+				slog.String("remote_addr", c.RealIP()),
 				slog.String("method", v.Method),
 				slog.String("uri", v.URI),
 				slog.Int("status", v.Status),
@@ -128,7 +137,10 @@ func forwardQuery(c echo.Context) error {
 	c.Response().Header().Set(echo.HeaderXRequestID,
 		fmt.Sprintf("%v_%04x", c.Response().Header().Get(echo.HeaderXRequestID), query.Id))
 
+	logger := slog.With(slog.String("request_id", c.Response().Header().Get(echo.HeaderXRequestID)))
 	ctx := request.Context()
+	logger.LogAttrs(ctx, slog.LevelDebug, "request", slog.Any("headers", request.Header))
+
 	var cancel context.CancelFunc
 	if queryTimeout := viper.GetDuration("timeout.query"); queryTimeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, queryTimeout)
@@ -137,13 +149,12 @@ func forwardQuery(c echo.Context) error {
 
 	ch := make(chan dnsResult)
 	go func(query *dns.Msg) {
-		result, rtt, err := (&dns.Client{}).ExchangeContext(
+		result, rtt, err := (&dns.Client{Timeout: time.Duration(math.MaxInt64)}).ExchangeContext(
 			ctx, query, fmt.Sprintf("%s:%d", viper.GetString("resolver.host"), viper.GetInt("resolver.port")))
 		ch <- dnsResult{Result: result, RTT: rtt, Err: err}
 	}(query.Copy()) // queryは以下でもアクセスするので、raceを避けるためにコピーしてgoroutineの引数に渡している
 
-	logger := slog.With(
-		slog.String("request_id", c.Response().Header().Get(echo.HeaderXRequestID)),
+	logger = logger.With(
 		slog.String("name", query.Question[0].Name),
 		slog.String("class", dns.ClassToString[query.Question[0].Qclass]),
 		slog.String("type", dns.TypeToString[query.Question[0].Qtype]),
