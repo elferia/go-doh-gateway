@@ -149,6 +149,8 @@ func forwardQuery(c echo.Context) error {
 
 	ch := make(chan dnsResult)
 	go func(query *dns.Msg) {
+		// dns.Clientはデフォルトで2秒しか待たないので、大きな値を設定してタイムアウトを実質無効にする
+		// ExchangeContextWithConnを使いたかったが、dns.Connのconcurrency safetyが不明なので使わない
 		result, rtt, err := (&dns.Client{Timeout: time.Duration(math.MaxInt64)}).ExchangeContext(
 			ctx, query, fmt.Sprintf("%s:%d", viper.GetString("resolver.host"), viper.GetInt("resolver.port")))
 		ch <- dnsResult{Result: result, RTT: rtt, Err: err}
