@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"math"
@@ -128,17 +126,17 @@ func forwardQuery(c echo.Context) error {
 		return c.String(400, err.Error())
 	}
 
-	dnsId := make([]byte, 2)
-	if _, err := rand.Read(dnsId); err != nil {
-		return err
-	}
+	requestId := c.Response().Header().Get(echo.HeaderXRequestID)
+	// request IDの末尾3文字をbase52 decodeしてquery IDとする
+	// endianは気にしない
+	tail3int := base52Decode(requestId[32-3:])
 	originalId := query.Id
-	query.Id = binary.BigEndian.Uint16(dnsId)
-	c.Response().Header().Set(echo.HeaderXRequestID,
-		fmt.Sprintf("%v_%04x", c.Response().Header().Get(echo.HeaderXRequestID), query.Id))
+	query.Id = uint16(tail3int % (1 << 16))
 
-	logger := slog.With(slog.String("request_id", c.Response().Header().Get(echo.HeaderXRequestID)))
+	logger := slog.With(slog.String("request_id", requestId))
 	ctx := request.Context()
+	logger.LogAttrs(
+		ctx, slog.LevelDebug, "query ID generated", slog.Any("tail3", tail3int), slog.Any("ID", myUint16(query.Id)))
 	logger.LogAttrs(ctx, slog.LevelDebug, "request", slog.Any("headers", request.Header))
 
 	var cancel context.CancelFunc
@@ -221,6 +219,24 @@ respondHttp:
 	}
 
 	return c.Blob(200, "application/dns-message", responseBody)
+}
+
+func base52Decode(encoded string) int32 {
+	const space = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	const base = len(space)
+
+	var decoded int32
+	for i := 0; i < len(encoded); i++ {
+		idx := strings.IndexByte(space, encoded[i])
+		decoded = decoded*int32(base) + int32(idx)
+	}
+	return decoded
+}
+
+type myUint16 uint16
+
+func (m myUint16) LogValue() slog.Value {
+	return slog.StringValue(fmt.Sprintf("%x", m))
 }
 
 type dnsResult struct {
