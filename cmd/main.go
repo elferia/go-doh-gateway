@@ -65,12 +65,10 @@ func main() {
 		}))
 	}
 
-	origIPExtractor := e.IPExtractor
+	// もとのe.IPExtractorはnilであるため、カスタムIPExtractorからもとのIPExtractorにfallbackすることはできない
+	// 面倒なのでcloudflareヘッダがなければ諦める
 	e.IPExtractor = func(request *http.Request) string {
-		if v := request.Header.Get("CF-Connecting-IP"); v != "" {
-			return v
-		}
-		return origIPExtractor(request)
+		return request.Header.Get("CF-Connecting-IP")
 	}
 
 	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
